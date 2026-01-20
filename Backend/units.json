@@ -1,0 +1,14 @@
+{
+  "1": {
+    "name": "Unidade de Saúde - Centro",
+    "lat": -21.780096,
+    "lon": -46.601921,
+    "radius_meters": 80
+  },
+    "2": {
+        "name": "Casa do DEV",
+        "lat": -21.783894,
+        "lon": -46.602757,
+        "radius_meters": 100
+    }
+}

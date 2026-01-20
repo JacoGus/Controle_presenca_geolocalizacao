@@ -1,0 +1,175 @@
+# Salva FastAPI app em Backend\app.py
+$content = @'
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+import numpy as np
+import cv2
+from PIL import Image
+import os
+import sys
+import math
+import traceback
+import io
+
+# Adiciona o diretório raiz do projeto ao sys.path (para importar reconhecimento_facial)
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from reconhecimento_facial.face_recognition_system import FaceRecognitionSystem
+
+app = FastAPI(title="API de Reconhecimento Facial")
+
+# CORS - ajuste se quiser restringir origens
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+face_recognition_system = FaceRecognitionSystem()
+UNKNOWN_LABEL = "Desconhecido"
+
+# --------------------------------------------------------------------
+#  CONFIGURAÇÃO DE GEOREFERENCIAMENTO (AJUSTE AS COORDENADAS DEPOIS)
+# --------------------------------------------------------------------
+COURSE_LOCATIONS = {
+    "1": {  # Exemplo: disciplina com ID 1
+        "lat": -22.000000,      # TODO: colocar latitude REAL da sala/unidade
+        "lon": -45.000000,      # TODO: colocar longitude REAL da sala/unidade
+        "radius_meters": 80     # raio permitido em metros (ex: 80m)
+    },
+}
+
+def haversine_distance_m(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    R = 6371000  # raio médio da Terra em metros
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+@app.on_event("startup")
+def startup_event():
+    # Tenta carregar o modelo se existir
+    try:
+        face_recognition_system.load_model()
+    except Exception:
+        # Não falhar no startup; apenas logar
+        print("Erro ao carregar modelo no startup:")
+        traceback.print_exc()
+
+@app.get("/")
+def home():
+    return {"message": "API de Reconhecimento Facial (FastAPI) está funcionando!"}
+
+@app.post("/train")
+def train():
+    """
+    Treina o modelo usando todas as imagens dentro de `training_data`.
+    """
+    try:
+        face_recognition_system.train_model()
+        return {"message": "Modelo treinado com sucesso!"}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/register_face")
+async def register_face(person_name: str = Form(...), image: UploadFile = File(...)):
+    """
+    Recebe um multipart/form-data com 'person_name' (form field) e 'image' (file).
+    Salva a imagem em `training_data/<person_name>/...`.
+    """
+    try:
+        contents = await image.read()
+        pil_img = Image.open(io.BytesIO(contents)).convert("RGB")
+        image_np = np.array(pil_img)
+        frame = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+
+        saved_path = face_recognition_system.save_training_image(person_name, frame)
+        return {"message": "Imagem registrada com sucesso", "path": saved_path}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/recognize")
+async def recognize(image: UploadFile = File(...)):
+    try:
+        contents = await image.read()
+        pil_img = Image.open(io.BytesIO(contents)).convert("RGB")
+        image_np = np.array(pil_img)
+        frame = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+
+        # Carregar o modelo se necessário
+        if not face_recognition_system.known_face_encodings:
+            face_recognition_system.load_model()
+
+        face_names = face_recognition_system.recognize_faces(frame)
+        return {"recognized_faces": face_names}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+@app.post("/recognize_and_register")
+async def recognize_and_register(
+    latitude: str = Form(...),
+    longitude: str = Form(...),
+    courseId: str = Form(...),
+    image: UploadFile = File(...),
+):
+    """
+    Recebe imagem + latitude + longitude + courseId, reconhece e valida geofence.
+    """
+    try:
+        # 1) Ler e validar coordenadas
+        try:
+            lat = float(latitude)
+            lon = float(longitude)
+        except ValueError:
+            return JSONResponse(status_code=400, content={"success": False, "reason": "Latitude/longitude inválidas"})
+
+        # 2) Verificar courseId
+        course_cfg = COURSE_LOCATIONS.get(str(courseId))
+        if not course_cfg:
+            return JSONResponse(status_code=400, content={"success": False, "reason": "Localização não configurada para esse curso"})
+
+        # 3) Converter imagem para frame OpenCV
+        contents = await image.read()
+        pil_img = Image.open(io.BytesIO(contents)).convert("RGB")
+        image_np = np.array(pil_img)
+        frame = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+
+        # 4) Garantir que o modelo está carregado
+        if not face_recognition_system.known_face_encodings:
+            face_recognition_system.load_model()
+
+        # 5) Reconhecer
+        recognized_names = face_recognition_system.recognize_faces(frame)
+
+        # 6) Validar se achou alguém conhecido
+        if not recognized_names:
+            return {"success": False, "reason": "Nenhuma face conhecida detectada"}
+
+        if any(name == UNKNOWN_LABEL for name in recognized_names):
+            return {"success": False, "reason": "Face não reconhecida", "recognized_faces": recognized_names}
+
+        # 7) Geofence
+        dist = haversine_distance_m(lat, lon, course_cfg["lat"], course_cfg["lon"])
+        if dist > course_cfg["radius_meters"]:
+            return {
+                "success": False,
+                "reason": f"Fora da área permitida ({int(dist)}m > {course_cfg['radius_meters']}m)",
+                "recognized_faces": recognized_names,
+                "distance_m": dist,
+            }
+
+        # 8) (Futuro) registrar presença em DB
+        print(f"[PRESENÇA] curso={courseId} aluno={recognized_names[0]} lat={lat} lon={lon} dist={dist:.2f}m")
+
+        return {"success": True, "message": "Presença registrada com sucesso", "recognized_faces": recognized_names, "distance_m": dist}
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"success": False, "reason": str(e)})
+'@
+
+Set-Content -Path .\Backend\app.py -Value $content -Force -Encoding UTF8

@@ -1,0 +1,1 @@
+web: sh -c "pip install -r Backend/requirements.txt && gunicorn app:app"
