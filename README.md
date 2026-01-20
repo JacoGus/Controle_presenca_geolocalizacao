@@ -4,16 +4,6 @@
 O projeto consiste no desenvolvimento de um sistema de controle de presença para alunos de Medicina em unidades de saúde. A solução utiliza geolocalização para confirmar que o aluno está no local correto e reconhecimento facial para validar sua identidade, garantindo maior segurança, confiabilidade e automação no processo de registro de presença.
 
 ---
-
-## 👥 Integrantes
-
-- Artur Carlo Costa Pádua - RA: 835298
-- Gustavo Jacó - RA: 826466
-- Enzo Batista Salerno - RA: 840527
-- Diego Rodrigues Pereira Silva - RA: 824237
-- João Victor Dias Ferreira - RA: 838133
-
----
 # Etapas do projeto
 
 ## 1️⃣ Lean Canvas
